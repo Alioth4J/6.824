@@ -83,7 +83,7 @@ func (m *Master) AskForWork(args *Args, task *Reply) error {
 			} else if status == 1 {
 				if time.Now().After(m.MapStartTime[i].Add(10 * time.Second)) {
 					task.Id = i
-					task.Tpe = 1
+					task.Tpe = 0
 					task.Filename = m.Files[i]
 					m.MapStatus[i] = 1
 					m.MapStartTime[i] = time.Now()

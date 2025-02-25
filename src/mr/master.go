@@ -162,7 +162,7 @@ func (m *Master) FinishMap(args *Args, reply *Reply) error {
 				m.ReduceWorks[y] = append(m.ReduceWorks[y], filename)
 			}
 
-			// change the status of the work
+			// change the status of the task
 			m.MapStatus[args.Id] = 2
 			m.CompletedMapTaskCount++
 
@@ -199,7 +199,7 @@ func (m *Master) FinishReduce(args *Args, reply *Reply) error {
 				fmt.Fprintf(file, "%v %v\n", key, hashMap[key])
 			}
 
-			// change the status of the work
+			// change the status of the task
 			m.ReduceStatus[args.Id] = 2
 			m.CompletedReduceTaskCount++
 

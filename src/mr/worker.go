@@ -24,7 +24,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	for {
 		argsForWork := Args{}
 		task := Reply{}
-		call("Master.AskForWork", &argsForWork, &task)
+		call("Master.AskForTask", &argsForWork, &task)
 		switch task.Tpe {
 		case 0:
 			// Map

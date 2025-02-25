@@ -65,7 +65,7 @@ func (m *Master) server() {
 	go http.Serve(l, nil)
 }
 
-func (m *Master) AskForWork(args *Args, task *Reply) error {
+func (m *Master) AskForTask(args *Args, task *Reply) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 

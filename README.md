@@ -1,5 +1,5 @@
 # MIT 6.824, Spring 2020
-## Lab1
+## Lab1 MapReduce
 Passed all tests.  
 ```bash
 $ sudo sh test-mr.sh
@@ -56,4 +56,17 @@ unexpected EOF
 2025/02/23 22:43:25 cannot open 
 --- crash test: PASS
 *** PASSED ALL TESTS
+```
+
+## Lab2 Raft
+### 2A
+Passed.  
+```bash
+$ sudo go test -run 2A
+Test (2A): initial election ...
+  ... Passed --   3.0  3   32    8178    0
+Test (2A): election after network failure ...
+  ... Passed --   4.4  3   82   15268    0
+PASS
+ok  	github.com/alioth4j/6.824/src/raft	7.447s
 ```

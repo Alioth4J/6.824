@@ -269,7 +269,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// log consistency check, check the last index and term.
 	if args.PrevLogIndex > 0 {
-		if len(rf.log) < args.PrevLogTerm {
+		if len(rf.log) < args.PrevLogIndex {
 			reply.Success = false
 			return
 		}

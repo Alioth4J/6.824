@@ -230,7 +230,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-// AppendEntries PRC
+// AppendEntries RPC
 type AppendEntriesArgs struct {
 	Term         int
 	LeaderId     int

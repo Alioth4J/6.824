@@ -417,11 +417,7 @@ func (rf *Raft) broadcastAppendEntries() {
 				return
 			}
 			if reply.Success {
-				if len(entries) > 0 {
-					rf.matchIndex[server] = prevLogIndex + len(entries)
-				} else {
-					rf.matchIndex[server] = max(rf.matchIndex[server], prevLogIndex)
-				}
+				rf.matchIndex[server] = prevLogIndex + len(entries)
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 				rf.updateCommitIndex()
 			} else {

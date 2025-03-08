@@ -513,7 +513,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.electionTimerGoroutine()
 	go rf.heartbeatGoroutine()
 
-	// applyCh
+	// apply commands to state machine
 	go func() {
 		for !rf.killed() {
 			rf.mu.Lock()

@@ -332,18 +332,26 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	// check whether this server is the leader
+	// if not, return false.
 	if rf.state != LEADER {
 		return -1, -1, false
 	}
 
+	// --- start the agreement ---
+	// construct LogEntry
 	entry := LogEntry{
 		Term:    rf.currentTerm,
 		Command: command,
 	}
+
+	// append to self's log
 	rf.log = append(rf.log, entry)
+
 	index := len(rf.log)
 	term := rf.currentTerm
 
+	// use goroutine to sync to others, as this method should return immediately
 	go rf.broadcastAppendEntries()
 
 	return index, term, true

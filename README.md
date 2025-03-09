@@ -93,3 +93,29 @@ Test (2B): RPC counts aren't too high ...
 PASS
 ok  	github.com/alioth4j/6.824/src/raft	39.506s
 ```
+### 2C
+Partially passed.
+```bash
+$ go test -run 2C
+Test (2C): basic persistence ...
+  ... Passed --   4.2  3   96   23826    6
+Test (2C): more persistence ...
+  ... Passed --  16.7  5  976  207488   16
+Test (2C): partitioned leader and one follower crash, leader restarts ...
+  ... Passed --   1.5  3   34    8521    4
+Test (2C): Figure 8 ...
+  ... Passed --  31.8  5 1088  239377   25
+Test (2C): unreliable agreement ...
+  ... Passed --   1.9  5 1056  353440  246
+Test (2C): Figure 8 (unreliable) ...
+--- FAIL: TestFigure8Unreliable2C (44.48s)
+    config.go:473: one(2398) failed to reach agreement
+Test (2C): churn ...
+  ... Passed --  16.1  5 10948 39933291 2578
+Test (2C): unreliable churn ...
+--- FAIL: TestUnreliableChurn2C (26.36s)
+    config.go:473: one(5951948907686747032) failed to reach agreement
+FAIL
+exit status 1
+FAIL	github.com/alioth4j/6.824/src/raft	143.067s
+```

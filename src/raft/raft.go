@@ -83,7 +83,6 @@ type Raft struct {
 
 	// each electionTimeout is different, so it is not saved here
 
-	// TODO adjust the timeout and interval
 	heartbeatInterval      time.Duration
 	resetElectionTimerChan chan struct{}
 	done                   chan struct{}
@@ -492,7 +491,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		lastApplied:            0,
 		nextIndex:              make([]int, len(peers)),
 		matchIndex:             make([]int, len(peers)),
-		heartbeatInterval:      100 * time.Millisecond, // the tester limits you to 10 heartbeats per second
+		heartbeatInterval:      10 * time.Millisecond, // in order to pass tests of Figure8 unreliable
 		resetElectionTimerChan: make(chan struct{}, 1),
 		done:                   make(chan struct{}),
 	}

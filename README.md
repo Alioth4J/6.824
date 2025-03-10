@@ -94,28 +94,25 @@ PASS
 ok  	github.com/alioth4j/6.824/src/raft	39.506s
 ```
 ### 2C
-Partially passed.
+Passed.  
 ```bash
 $ go test -run 2C
 Test (2C): basic persistence ...
-  ... Passed --   4.2  3   96   23826    6
+  ... Passed --   3.4  3  450  115818    6
 Test (2C): more persistence ...
-  ... Passed --  16.7  5  976  207488   16
+  ... Passed --  15.2  5 5987 1389550   16
 Test (2C): partitioned leader and one follower crash, leader restarts ...
-  ... Passed --   1.5  3   34    8521    4
+  ... Passed --   1.4  3  132   36137    4
 Test (2C): Figure 8 ...
-  ... Passed --  31.8  5 1088  239377   25
+  ... Passed --  28.7  5 3184  737719   43
 Test (2C): unreliable agreement ...
-  ... Passed --   1.9  5 1056  353440  246
+  ... Passed --   1.4  5 1400  463965  246
 Test (2C): Figure 8 (unreliable) ...
---- FAIL: TestFigure8Unreliable2C (44.48s)
-    config.go:473: one(2398) failed to reach agreement
+  ... Passed --  28.1  5 25588 36634913   88
 Test (2C): churn ...
-  ... Passed --  16.1  5 10948 39933291 2578
+  ... Passed --  19.0  5 13428 19540624 1391
 Test (2C): unreliable churn ...
---- FAIL: TestUnreliableChurn2C (26.36s)
-    config.go:473: one(5951948907686747032) failed to reach agreement
-FAIL
-exit status 1
-FAIL	github.com/alioth4j/6.824/src/raft	143.067s
+  ... Passed --  22.7  5 11808 14376116  957
+PASS
+ok  	github.com/alioth4j/6.824/src/raft	119.893s
 ```

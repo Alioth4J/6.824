@@ -116,3 +116,15 @@ Test (2C): unreliable churn ...
 PASS
 ok  	github.com/alioth4j/6.824/src/raft	119.893s
 ```
+
+## Lab3 KVRaft
+### 3A
+Partial passed.  
+```bash
+$ go test -run 3A
+Test: one client (3A) ...
+  ... Passed --  15.4  5 12763 1387
+Test: many clients (3A) ...
+^Csignal: interrupt
+FAIL	github.com/alioth4j/6.824/src/kvraft	66.738s
+```

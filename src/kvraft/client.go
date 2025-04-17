@@ -7,8 +7,10 @@ import (
 )
 
 type Clerk struct {
-	servers []*labrpc.ClientEnd
-	leader  int
+	servers  []*labrpc.ClientEnd
+	leader   int
+	clientId int64
+	seq      int64
 }
 
 func nrand() int64 {
@@ -21,18 +23,28 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.leader = 0
+	ck.clientId = nrand()
+	ck.seq = 0
 	ck.updateLeader()
 	return ck
 }
 
 func (ck *Clerk) updateLeader() {
+	args := &IsLeaderArgs{}
+	reply := &IsLeaderReply{}
+
+	if ok := ck.servers[ck.leader].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
+		return
+	}
+
 	for i := 0; i < len(ck.servers); i++ {
-		isLeaderArgs := &IsLeaderArgs{}
-		isLeaderReply := &IsLeaderReply{}
-		ck.servers[i].Call("KVServer.IsLeader", isLeaderArgs, isLeaderReply)
-		if isLeaderReply.Leader {
+		if i == ck.leader {
+			continue
+		}
+		if ok := ck.servers[i].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
 			ck.leader = i
-			break
+			return
 		}
 	}
 }
@@ -48,22 +60,24 @@ func (ck *Clerk) updateLeader() {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
+	// serial, no need to use lock
+	ck.seq++
+	args := &GetArgs{
+		Key:      key,
+		ClientId: ck.clientId,
+		Seq:      ck.seq,
+	}
 	for {
-		getArgs := &GetArgs{
-			Key:       key,
-			RequestId: nrand(),
-		}
-		getReply := &GetReply{}
-		ck.servers[ck.leader].Call("KVServer.Get", getArgs, getReply)
-		if getReply.Err == OK {
-			return getReply.Value
-		} else if getReply.Err == ErrNoKey {
-			return ""
-		} else if getReply.Err == ErrWrongLeader {
+		reply := &GetReply{}
+		ok := ck.servers[ck.leader].Call("KVServer.Get", args, reply)
+		if !ok || reply.Err == ErrWrongLeader || reply.Err == ErrTimeout {
 			ck.updateLeader()
-		} else if getReply.Err == ErrTimeout {
-			// retry
 			continue
+		}
+		if reply.Err == OK {
+			return reply.Value
+		} else if reply.Err == ErrNoKey {
+			return ""
 		}
 	}
 }
@@ -77,22 +91,24 @@ func (ck *Clerk) Get(key string) string {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	// serial, no need to use lock
+	ck.seq++
+	args := &PutAppendArgs{
+		Key:      key,
+		Value:    value,
+		Op:       op,
+		ClientId: ck.clientId,
+		Seq:      ck.seq,
+	}
 	for {
-		putAppendArgs := &PutAppendArgs{
-			Key:       key,
-			Value:     value,
-			Op:        op,
-			RequestId: nrand(),
-		}
-		putAppendReply := &PutAppendReply{}
-		ck.servers[ck.leader].Call("KVServer.PutAppend", putAppendArgs, putAppendReply)
-		if putAppendReply.Err == OK {
-			return
-		} else if putAppendReply.Err == ErrWrongLeader {
+		reply := &PutAppendReply{}
+		ok := ck.servers[ck.leader].Call("KVServer.PutAppend", args, reply)
+		if !ok || reply.Err == ErrWrongLeader || reply.Err == ErrTimeout {
 			ck.updateLeader()
-		} else if putAppendReply.Err == ErrTimeout {
-			// retry
 			continue
+		}
+		if reply.Err == OK {
+			return
 		}
 	}
 }

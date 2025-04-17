@@ -16,7 +16,13 @@ read unix @->/var/tmp/824-mr-0: read: connection reset by peer
 *** Starting map parallelism test.
 2025/02/23 22:42:39 dialing:dial-http unix /var/tmp/824-mr-0: read unix @->/var/tmp/824-mr-0: read: connection reset by peer
 unexpected EOF
-2025/02/23 22:42:39 cannot open 
+2025/02/23 22:42:39 $ go test -run 3A
+Test: one client (3A) ...
+  ... Passed --  15.4  5 12849 1393
+Test: many clients (3A) ...
+^Csignal: interrupt
+FAIL	github.com/alioth4j/6.824/src/kvraft	56.069s
+cannot open 
 --- map parallelism test: PASS
 *** Starting reduce parallelism test.
 2025/02/23 22:42:45 cannot open 
@@ -123,8 +129,8 @@ Partial passed.
 ```bash
 $ go test -run 3A
 Test: one client (3A) ...
-  ... Passed --  15.4  5 12763 1387
+  ... Passed --  15.4  5 12849 1393
 Test: many clients (3A) ...
 ^Csignal: interrupt
-FAIL	github.com/alioth4j/6.824/src/kvraft	66.738s
+FAIL	github.com/alioth4j/6.824/src/kvraft	56.069s
 ```

@@ -10,7 +10,6 @@ type Clerk struct {
 	servers  []*labrpc.ClientEnd
 	leader   int
 	clientId int64
-	seq      int64
 }
 
 func nrand() int64 {
@@ -23,9 +22,7 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.leader = 0
 	ck.clientId = nrand()
-	ck.seq = 0
 	ck.updateLeader()
 	return ck
 }
@@ -61,23 +58,25 @@ func (ck *Clerk) updateLeader() {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
 	// serial, no need to use lock
-	ck.seq++
 	args := &GetArgs{
 		Key:      key,
 		ClientId: ck.clientId,
-		Seq:      ck.seq,
 	}
 	for {
 		reply := &GetReply{}
 		ok := ck.servers[ck.leader].Call("KVServer.Get", args, reply)
-		if !ok || reply.Err == ErrWrongLeader || reply.Err == ErrTimeout {
+		if ok {
+			if reply.Err == OK {
+				return reply.Value
+			} else if reply.Err == ErrWrongLeader {
+				ck.updateLeader()
+				continue
+			} else if reply.Err == ErrTimeout {
+				continue
+			}
+		} else {
 			ck.updateLeader()
 			continue
-		}
-		if reply.Err == OK {
-			return reply.Value
-		} else if reply.Err == ErrNoKey {
-			return ""
 		}
 	}
 }
@@ -92,23 +91,28 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// serial, no need to use lock
-	ck.seq++
 	args := &PutAppendArgs{
-		Key:      key,
-		Value:    value,
-		Op:       op,
-		ClientId: ck.clientId,
-		Seq:      ck.seq,
+		Key:       key,
+		Value:     value,
+		Op:        op,
+		ClientId:  ck.clientId,
+		RequestId: nrand(),
 	}
 	for {
 		reply := &PutAppendReply{}
 		ok := ck.servers[ck.leader].Call("KVServer.PutAppend", args, reply)
-		if !ok || reply.Err == ErrWrongLeader || reply.Err == ErrTimeout {
+		if ok {
+			if reply.Err == OK {
+				return
+			} else if reply.Err == ErrWrongLeader {
+				ck.updateLeader()
+				continue
+			} else if reply.Err == ErrTimeout {
+				continue
+			}
+		} else {
 			ck.updateLeader()
 			continue
-		}
-		if reply.Err == OK {
-			return
 		}
 	}
 }

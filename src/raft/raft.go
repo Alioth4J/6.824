@@ -491,7 +491,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		lastApplied:            0,
 		nextIndex:              make([]int, len(peers)),
 		matchIndex:             make([]int, len(peers)),
-		heartbeatInterval:      10 * time.Millisecond, // in order to pass tests of Figure8 unreliable
+		heartbeatInterval:      100 * time.Millisecond, // in order to pass tests of Figure8 unreliable
 		resetElectionTimerChan: make(chan struct{}, 1),
 		done:                   make(chan struct{}),
 	}

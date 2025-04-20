@@ -4,29 +4,29 @@ import (
 	"github.com/alioth4j/6.824/src/labgob"
 	"github.com/alioth4j/6.824/src/labrpc"
 	"github.com/alioth4j/6.824/src/raft"
-	"log"
+	//"log"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const Debug = 0
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
+//const Debug = 0
+//
+//func DPrintf(format string, a ...interface{}) (n int, err error) {
+//	if Debug > 0 {
+//		log.Printf(format, a...)
+//	}
+//	return
+//}
 
 const timeout = 500 * time.Millisecond
 
 type Op struct {
-	Key      string
-	Value    string // only used in PutAppend
-	Type     string // "Get", "Put", "Append"
-	ClientId int64
-	Seq      int64
+	Key       string
+	Value     string // only used in PutAppend
+	Type      string // "Get", "Put", "Append"
+	ClientId  int64
+	RequestId int64
 }
 
 type KVServer struct {
@@ -35,29 +35,15 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	rf      *raft.Raft
 
-	kvmap            map[string]string
-	lastAppliedOpMap map[int64]*AppliedOp
-	pendingOpMap     map[int64]*PendingOp
+	kv               map[string]string
+	getResults       map[int]chan string   // key: index; value: value
+	putAppendResults map[int]chan struct{} // key: index; value: struct{}{}
+	lastApplied      int
+	duplicateMap     map[int64]Op // key: clientId; value: Op
 
 	maxraftstate int // snapshot if log grows this big
 
 	dead int32 // set by Kill()
-}
-
-type OpResult struct {
-	Err   Err
-	Value string // only used in GET
-}
-
-type AppliedOp struct {
-	Seq      int64
-	OpResult OpResult
-}
-
-type PendingOp struct {
-	seq    int64
-	index  int
-	result chan OpResult
 }
 
 // servers[] contains the ports of the set of
@@ -77,74 +63,96 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
+	// new and set
 	kv := new(KVServer)
 	kv.me = me
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.kvmap = make(map[string]string)
-	kv.lastAppliedOpMap = make(map[int64]*AppliedOp)
-	kv.pendingOpMap = make(map[int64]*PendingOp)
+	kv.kv = make(map[string]string)
+	kv.getResults = make(map[int]chan string)
+	kv.putAppendResults = make(map[int]chan struct{})
+	kv.lastApplied = 0
+	kv.duplicateMap = make(map[int64]Op)
 	kv.maxraftstate = maxraftstate
 
-	go func() {
-		for !kv.killed() {
-			applyMsg := <-kv.applyCh
-			if !applyMsg.CommandValid {
-				continue
-			}
-			kv.mu.Lock()
-			op := applyMsg.Command.(Op)
-			lastApplied := kv.getLastApplied(op.ClientId)
-			opResult := OpResult{}
+	// apply with goroutine
+	go kv.apply()
 
-			if op.Seq > lastApplied.Seq {
-				if op.Type == "Get" {
-					value, ok := kv.kvmap[op.Key]
-					if !ok {
-						opResult.Err = ErrNoKey
-					} else {
-						opResult.Err = OK
-						opResult.Value = value
-					}
-				} else if op.Type == "Put" {
-					kv.kvmap[op.Key] = op.Value
-					opResult.Err = OK
-				} else if op.Type == "Append" {
-					oldValue, ok := kv.kvmap[op.Key]
-					if ok {
-						kv.kvmap[op.Key] = oldValue + op.Value
-					} else {
-						kv.kvmap[op.Key] = op.Value
-					}
-					opResult.Err = OK
-				}
-				lastApplied.Seq = op.Seq
-				lastApplied.OpResult = opResult
-			} else {
-				opResult = lastApplied.OpResult
-			}
-
-			if pendingOp, ok := kv.pendingOpMap[op.ClientId]; ok && pendingOp.seq == op.Seq {
-				pendingOp.result <- opResult
-				delete(kv.pendingOpMap, op.ClientId)
-			}
-
-			kv.mu.Unlock()
-		}
-	}()
-
+	// return
 	return kv
 }
 
-func (kv *KVServer) getLastApplied(clientId int64) *AppliedOp {
-	if lastApplied, ok := kv.lastAppliedOpMap[clientId]; ok {
-		return lastApplied
+func (kv *KVServer) apply() {
+	for applyMsg := range kv.applyCh {
+		if kv.killed() {
+			return
+		}
+
+		commandValid := applyMsg.CommandValid
+		command := applyMsg.Command
+		commandIndex := applyMsg.CommandIndex
+		if commandValid {
+			kv.mu.Lock()
+
+			if commandIndex <= kv.lastApplied {
+				kv.mu.Unlock()
+				continue
+			}
+
+			op := command.(Op)
+			switch op.Type {
+			case "Get":
+				if resultChan, ok := kv.getResults[commandIndex]; ok {
+					if value, ok := kv.kv[op.Key]; ok {
+						go func() {
+							resultChan <- value
+						}()
+					} else {
+						go func() {
+							resultChan <- ""
+						}()
+					}
+				} else {
+					kv.lastApplied = commandIndex
+					kv.mu.Unlock()
+					continue
+				}
+			case "Put", "Append":
+				if oldOp, ok := kv.duplicateMap[op.ClientId]; ok {
+					if op.RequestId == oldOp.RequestId {
+						if resultChan, ok := kv.putAppendResults[commandIndex]; ok {
+							go func() {
+								resultChan <- struct{}{}
+							}()
+						}
+						kv.lastApplied = commandIndex
+						kv.mu.Unlock()
+						continue
+					}
+				}
+				kv.duplicateMap[op.ClientId] = op
+				if resultChan, ok := kv.putAppendResults[commandIndex]; ok {
+					if op.Type == "Put" {
+						kv.kv[op.Key] = op.Value
+					} else if op.Type == "Append" {
+						kv.kv[op.Key] += op.Value
+					}
+					go func() {
+						resultChan <- struct{}{}
+					}()
+				} else {
+					kv.lastApplied = commandIndex
+					kv.mu.Unlock()
+					continue
+				}
+			}
+
+			kv.lastApplied = commandIndex
+			kv.mu.Unlock()
+		} else {
+			// ignore
+		}
 	}
-	lastApplied := &AppliedOp{
-		Seq: -1,
-	}
-	kv.lastAppliedOpMap[clientId] = lastApplied
-	return lastApplied
 }
 
 func (kv *KVServer) IsLeader(args *IsLeaderArgs, reply *IsLeaderReply) {
@@ -155,37 +163,14 @@ func (kv *KVServer) IsLeader(args *IsLeaderArgs, reply *IsLeaderReply) {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	// lock
 	kv.mu.Lock()
 
-	// is leader?
+	// leader check
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
-		return
-	}
-
-	lastApplied := kv.getLastApplied(args.ClientId)
-
-	// has been applied?
-	if args.Seq <= lastApplied.Seq {
-		reply.Err = lastApplied.OpResult.Err
-		reply.Value = lastApplied.OpResult.Value
-		kv.mu.Unlock()
-		return
-	}
-
-	// pending?
-	if pendingOp, ok := kv.pendingOpMap[args.ClientId]; ok && args.Seq == pendingOp.seq {
-		kv.mu.Unlock()
-		time.Sleep(timeout)
-		lastApplied := kv.getLastApplied(args.ClientId)
-		if args.Seq <= lastApplied.Seq {
-			reply.Err = lastApplied.OpResult.Err
-			reply.Value = lastApplied.OpResult.Value
-		} else {
-			reply.Err = ErrTimeout
-		}
 		return
 	}
 
@@ -194,47 +179,38 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		Key:      args.Key,
 		Type:     "Get",
 		ClientId: args.ClientId,
-		Seq:      args.Seq,
 	}
-	index, term, isLeader := kv.rf.Start(op)
+	index, _, isLeader := kv.rf.Start(op)
 
+	// leader check
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
 	}
 
-	resultChan := make(chan OpResult, 1)
-	kv.pendingOpMap[args.ClientId] = &PendingOp{
-		seq:    args.Seq,
-		index:  index,
-		result: resultChan,
-	}
+	// make the result channel
+	resultChan := make(chan string, 1)
+	kv.getResults[index] = resultChan
 
+	// unlock and wait for the reply
 	kv.mu.Unlock()
-
 	select {
-	case opResult := <-resultChan:
-		reply.Err = opResult.Err
-		reply.Value = opResult.Value
+	case value := <-resultChan:
+		reply.Err = OK
+		reply.Value = value
+		return
 	case <-time.After(timeout):
-		kv.mu.Lock()
-		currentTerm, currentIsLeader := kv.rf.GetState()
-		if currentTerm != term || !currentIsLeader {
-			reply.Err = ErrWrongLeader
-		} else {
-			reply.Err = ErrTimeout
-		}
-		if pendingOp, ok := kv.pendingOpMap[args.ClientId]; ok && pendingOp.seq == args.Seq {
-			delete(kv.pendingOpMap, args.ClientId)
-		}
-		kv.mu.Unlock()
+		reply.Err = ErrTimeout
+		return
 	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	// lock
 	kv.mu.Lock()
 
+	// leader check
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -242,65 +218,36 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	// has been applied?
-	lastApplied := kv.getLastApplied(args.ClientId)
-	if args.Seq <= lastApplied.Seq {
-		reply.Err = lastApplied.OpResult.Err
-		kv.mu.Unlock()
-		return
-	}
-
-	// pending?
-	if pendingOp, ok := kv.pendingOpMap[args.ClientId]; ok && args.Seq == pendingOp.seq {
-		kv.mu.Unlock()
-		time.Sleep(timeout)
-		lastApplied := kv.getLastApplied(args.ClientId)
-		if args.Seq <= lastApplied.Seq {
-			reply.Err = lastApplied.OpResult.Err
-		} else {
-			reply.Err = ErrTimeout
-		}
-		return
-	}
-
+	// send request to raft
 	op := Op{
-		Key:      args.Key,
-		Value:    args.Value,
-		Type:     args.Op,
-		ClientId: args.ClientId,
-		Seq:      args.Seq,
+		Key:       args.Key,
+		Value:     args.Value,
+		Type:      args.Op,
+		ClientId:  args.ClientId,
+		RequestId: args.RequestId,
 	}
-	index, term, isLeader := kv.rf.Start(op)
+	index, _, isLeader := kv.rf.Start(op)
+
+	// leader check
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
 	}
 
-	resultChan := make(chan OpResult, 1)
-	kv.pendingOpMap[args.ClientId] = &PendingOp{
-		seq:    args.Seq,
-		index:  index,
-		result: resultChan,
-	}
+	// make the result channel
+	resultChan := make(chan struct{}, 1)
+	kv.putAppendResults[index] = resultChan
 
+	// wait for the reply
 	kv.mu.Unlock()
-
 	select {
-	case opResult := <-resultChan:
-		reply.Err = opResult.Err
+	case <-resultChan:
+		reply.Err = OK
+		return
 	case <-time.After(timeout):
-		kv.mu.Lock()
-		currentTerm, currentIsLeader := kv.rf.GetState()
-		if currentTerm != term || !currentIsLeader {
-			reply.Err = ErrWrongLeader
-		} else {
-			reply.Err = ErrTimeout
-		}
-		if pendingOp, ok := kv.pendingOpMap[args.ClientId]; ok && pendingOp.seq == args.Seq {
-			delete(kv.pendingOpMap, args.ClientId)
-		}
-		kv.mu.Unlock()
+		reply.Err = ErrTimeout
+		return
 	}
 }
 

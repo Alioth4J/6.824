@@ -191,11 +191,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	case value := <-resultChan:
 		reply.Err = OK
 		reply.Value = value
-		return
 	case <-time.After(timeout):
 		reply.Err = ErrTimeout
-		return
 	}
+
+	kv.mu.Lock()
+	delete(kv.getResults, index)
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -206,6 +208,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
+		kv.mu.Unlock()
+		return
+	}
+
+	// pre-deduplicate
+	if lastRequestId, ok := kv.duplicateMap[args.ClientId]; ok && args.ClientId == lastRequestId {
+		reply.Err = OK
 		kv.mu.Unlock()
 		return
 	}
@@ -236,11 +245,13 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	select {
 	case <-resultChan:
 		reply.Err = OK
-		return
 	case <-time.After(timeout):
 		reply.Err = ErrTimeout
-		return
 	}
+
+	kv.mu.Lock()
+	delete(kv.putAppendResults, index)
+	kv.mu.Unlock()
 }
 
 // the tester calls Kill() when a KVServer instance won't

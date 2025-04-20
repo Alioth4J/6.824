@@ -39,7 +39,7 @@ type KVServer struct {
 	getResults       map[int]chan string   // key: index; value: value
 	putAppendResults map[int]chan struct{} // key: index; value: struct{}{}
 	lastApplied      int
-	duplicateMap     map[int64]Op // key: clientId; value: Op
+	duplicateMap     map[int64]int64 // key: clientId; value: Op
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -72,7 +72,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.getResults = make(map[int]chan string)
 	kv.putAppendResults = make(map[int]chan struct{})
 	kv.lastApplied = 0
-	kv.duplicateMap = make(map[int64]Op)
+	kv.duplicateMap = make(map[int64]int64)
 	kv.maxraftstate = maxraftstate
 
 	// apply with goroutine
@@ -112,14 +112,10 @@ func (kv *KVServer) apply() {
 							resultChan <- ""
 						}()
 					}
-				} else {
-					kv.lastApplied = commandIndex
-					kv.mu.Unlock()
-					continue
 				}
 			case "Put", "Append":
-				if oldOp, ok := kv.duplicateMap[op.ClientId]; ok {
-					if op.RequestId == oldOp.RequestId {
+				if lastRequestId, ok := kv.duplicateMap[op.ClientId]; ok {
+					if op.RequestId == lastRequestId {
 						if resultChan, ok := kv.putAppendResults[commandIndex]; ok {
 							go func() {
 								resultChan <- struct{}{}
@@ -130,20 +126,16 @@ func (kv *KVServer) apply() {
 						continue
 					}
 				}
-				kv.duplicateMap[op.ClientId] = op
+				kv.duplicateMap[op.ClientId] = op.RequestId
+				if op.Type == "Put" {
+					kv.kv[op.Key] = op.Value
+				} else if op.Type == "Append" {
+					kv.kv[op.Key] += op.Value
+				}
 				if resultChan, ok := kv.putAppendResults[commandIndex]; ok {
-					if op.Type == "Put" {
-						kv.kv[op.Key] = op.Value
-					} else if op.Type == "Append" {
-						kv.kv[op.Key] += op.Value
-					}
 					go func() {
 						resultChan <- struct{}{}
 					}()
-				} else {
-					kv.lastApplied = commandIndex
-					kv.mu.Unlock()
-					continue
 				}
 			}
 

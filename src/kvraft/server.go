@@ -39,7 +39,7 @@ type KVServer struct {
 	getResults       map[int]chan string   // key: index; value: value
 	putAppendResults map[int]chan struct{} // key: index; value: struct{}{}
 	lastApplied      int
-	duplicateMap     map[int64]int64 // key: clientId; value: Op
+	duplicateMap     map[int64]int64 // key: clientId; value: RequestId
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -213,7 +213,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	// pre-deduplicate
-	if lastRequestId, ok := kv.duplicateMap[args.ClientId]; ok && args.ClientId == lastRequestId {
+	if lastRequestId, ok := kv.duplicateMap[args.ClientId]; ok && args.RequestId == lastRequestId {
 		reply.Err = OK
 		kv.mu.Unlock()
 		return

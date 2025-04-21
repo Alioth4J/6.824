@@ -99,10 +99,21 @@ func (kv *KVServer) apply() {
 				continue
 			}
 
+			notifyGet := make(chan string, 1)
+			notifyPutAppend := make(chan struct{}, 1)
+
+			var value string
+
 			// commit to kv.kv
 			op := command.(Op)
 			switch op.Type {
 			case "Get":
+				notifyGet = kv.getResults[commandIndex]
+				if v, ok := kv.kv[op.Key]; ok {
+					value = v
+				} else {
+					value = ""
+				}
 				break
 			case "Put", "Append":
 				if lastRequestId, ok := kv.duplicateMap[op.ClientId]; ok {
@@ -123,38 +134,32 @@ func (kv *KVServer) apply() {
 				} else if op.Type == "Append" {
 					kv.kv[op.Key] += op.Value
 				}
+				notifyPutAppend = kv.putAppendResults[commandIndex]
 				break
 			}
 
 			kv.lastApplied = commandIndex
 
+			kv.mu.Unlock()
+
 			if _, isLeader := kv.rf.GetState(); !isLeader {
 				// let the Clerk timeout and resend a request
-				kv.mu.Unlock()
+				//kv.mu.Unlock()
 				continue
 			}
 
-			switch op.Type {
-			case "Get":
-				if resultChan, ok := kv.getResults[commandIndex]; ok {
-					if value, ok := kv.kv[op.Key]; ok {
-						go func() {
-							resultChan <- value
-						}()
-					} else {
-						go func() {
-							resultChan <- ""
-						}()
-					}
-				}
-			case "Put", "Append":
-				if resultChan, ok := kv.putAppendResults[commandIndex]; ok {
-					go func() {
-						resultChan <- struct{}{}
-					}()
+			if notifyGet != nil {
+				select {
+				case notifyGet <- value:
+				default:
 				}
 			}
-			kv.mu.Unlock()
+			if notifyPutAppend != nil {
+				select {
+				case notifyPutAppend <- struct{}{}:
+				default:
+				}
+			}
 		} else {
 			// ignore
 		}
@@ -169,14 +174,11 @@ func (kv *KVServer) apply() {
 //}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// lock
-	kv.mu.Lock()
-
 	// leader check
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
+		//kv.mu.Unlock()
 		return
 	}
 
@@ -191,9 +193,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// leader check
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
+		//kv.mu.Unlock()
 		return
 	}
+
+	// lock
+	kv.mu.Lock()
 
 	// make the result channel
 	resultChan := make(chan string, 1)
@@ -216,21 +221,18 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// lock
-	kv.mu.Lock()
-
 	// leader check
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
+		//kv.mu.Unlock()
 		return
 	}
 
 	// pre-deduplicate
 	if lastRequestId, ok := kv.duplicateMap[args.ClientId]; ok && args.RequestId == lastRequestId {
 		reply.Err = OK
-		kv.mu.Unlock()
+		//kv.mu.Unlock()
 		return
 	}
 
@@ -247,9 +249,12 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// leader check
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
+		//kv.mu.Unlock()
 		return
 	}
+
+	// lock
+	kv.mu.Lock()
 
 	// make the result channel
 	resultChan := make(chan struct{}, 1)

@@ -99,20 +99,11 @@ func (kv *KVServer) apply() {
 				continue
 			}
 
+			// commit to kv.kv
 			op := command.(Op)
 			switch op.Type {
 			case "Get":
-				if resultChan, ok := kv.getResults[commandIndex]; ok {
-					if value, ok := kv.kv[op.Key]; ok {
-						go func() {
-							resultChan <- value
-						}()
-					} else {
-						go func() {
-							resultChan <- ""
-						}()
-					}
-				}
+				break
 			case "Put", "Append":
 				if lastRequestId, ok := kv.duplicateMap[op.ClientId]; ok {
 					if op.RequestId == lastRequestId {
@@ -132,14 +123,37 @@ func (kv *KVServer) apply() {
 				} else if op.Type == "Append" {
 					kv.kv[op.Key] += op.Value
 				}
+				break
+			}
+
+			kv.lastApplied = commandIndex
+
+			if _, isLeader := kv.rf.GetState(); !isLeader {
+				// let the Clerk timeout and resend a request
+				kv.mu.Unlock()
+				continue
+			}
+
+			switch op.Type {
+			case "Get":
+				if resultChan, ok := kv.getResults[commandIndex]; ok {
+					if value, ok := kv.kv[op.Key]; ok {
+						go func() {
+							resultChan <- value
+						}()
+					} else {
+						go func() {
+							resultChan <- ""
+						}()
+					}
+				}
+			case "Put", "Append":
 				if resultChan, ok := kv.putAppendResults[commandIndex]; ok {
 					go func() {
 						resultChan <- struct{}{}
 					}()
 				}
 			}
-
-			kv.lastApplied = commandIndex
 			kv.mu.Unlock()
 		} else {
 			// ignore
@@ -147,12 +161,12 @@ func (kv *KVServer) apply() {
 	}
 }
 
-func (kv *KVServer) IsLeader(args *IsLeaderArgs, reply *IsLeaderReply) {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-	_, isLeader := kv.rf.GetState()
-	reply.Leader = isLeader
-}
+//func (kv *KVServer) IsLeader(args *IsLeaderArgs, reply *IsLeaderReply) {
+//	kv.mu.Lock()
+//	defer kv.mu.Unlock()
+//	_, isLeader := kv.rf.GetState()
+//	reply.Leader = isLeader
+//}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// lock
@@ -195,6 +209,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrTimeout
 	}
 
+	// cleanup
 	kv.mu.Lock()
 	delete(kv.getResults, index)
 	kv.mu.Unlock()
@@ -249,6 +264,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrTimeout
 	}
 
+	// cleanup
 	kv.mu.Lock()
 	delete(kv.putAppendResults, index)
 	kv.mu.Unlock()

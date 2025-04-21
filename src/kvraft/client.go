@@ -4,11 +4,12 @@ import (
 	"crypto/rand"
 	"github.com/alioth4j/6.824/src/labrpc"
 	"math/big"
+	"sync/atomic"
 )
 
 type Clerk struct {
 	servers  []*labrpc.ClientEnd
-	leader   int
+	leader   int32
 	clientId int64
 }
 
@@ -22,29 +23,30 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.leader = 0
 	ck.clientId = nrand()
-	ck.updateLeader()
+	//ck.updateLeader()
 	return ck
 }
 
-func (ck *Clerk) updateLeader() {
-	args := &IsLeaderArgs{}
-	reply := &IsLeaderReply{}
-
-	if ok := ck.servers[ck.leader].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
-		return
-	}
-
-	for i := 0; i < len(ck.servers); i++ {
-		if i == ck.leader {
-			continue
-		}
-		if ok := ck.servers[i].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
-			ck.leader = i
-			return
-		}
-	}
-}
+//func (ck *Clerk) updateLeader() {
+//	args := &IsLeaderArgs{}
+//	reply := &IsLeaderReply{}
+//
+//	if ok := ck.servers[ck.leader].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
+//		return
+//	}
+//
+//	for i := 0; i < len(ck.servers); i++ {
+//		if i == ck.leader {
+//			continue
+//		}
+//		if ok := ck.servers[i].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
+//			ck.leader = i
+//			return
+//		}
+//	}
+//}
 
 // fetch the current value for a key.
 // returns "" if the key does not exist.
@@ -62,20 +64,21 @@ func (ck *Clerk) Get(key string) string {
 		Key:      key,
 		ClientId: ck.clientId,
 	}
+	leader := atomic.LoadInt32(&ck.leader)
 	for {
 		reply := &GetReply{}
-		ok := ck.servers[ck.leader].Call("KVServer.Get", args, reply)
+		ok := ck.servers[leader].Call("KVServer.Get", args, reply)
 		if ok {
 			if reply.Err == OK {
 				return reply.Value
 			} else if reply.Err == ErrWrongLeader {
-				ck.updateLeader()
+				ck.leader = ck.nextLeader(leader)
 				continue
 			} else if reply.Err == ErrTimeout {
 				continue
 			}
 		} else {
-			ck.updateLeader()
+			ck.leader = ck.nextLeader(leader)
 			continue
 		}
 	}
@@ -98,23 +101,31 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ClientId:  ck.clientId,
 		RequestId: nrand(),
 	}
+	leader := atomic.LoadInt32(&ck.leader)
 	for {
 		reply := &PutAppendReply{}
-		ok := ck.servers[ck.leader].Call("KVServer.PutAppend", args, reply)
+		ok := ck.servers[leader].Call("KVServer.PutAppend", args, reply)
 		if ok {
 			if reply.Err == OK {
 				return
 			} else if reply.Err == ErrWrongLeader {
-				ck.updateLeader()
+				leader = ck.nextLeader(leader)
 				continue
 			} else if reply.Err == ErrTimeout {
 				continue
 			}
 		} else {
-			ck.updateLeader()
+			ck.leader = ck.nextLeader(leader)
 			continue
 		}
 	}
+}
+
+func (ck *Clerk) nextLeader(current int32) int32 {
+	next := (current + 1) % int32(len(ck.servers))
+	atomic.StoreInt32(&ck.leader, next)
+	return next
+
 }
 
 func (ck *Clerk) Put(key string, value string) {

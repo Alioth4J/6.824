@@ -104,23 +104,23 @@ Passed.
 ```bash
 $ go test -run 2C
 Test (2C): basic persistence ...
-  ... Passed --   3.4  3  450  115818    6
+  ... Passed --   3.8  3  136   34751    6
 Test (2C): more persistence ...
-  ... Passed --  15.2  5 5987 1389550   16
+  ... Passed --  15.1  5 1494  332482   16
 Test (2C): partitioned leader and one follower crash, leader restarts ...
-  ... Passed --   1.4  3  132   36137    4
+  ... Passed --   1.7  3   48   12540    4
 Test (2C): Figure 8 ...
-  ... Passed --  28.7  5 3184  737719   43
+  ... Passed --  24.0  5 1096  240238   38
 Test (2C): unreliable agreement ...
-  ... Passed --   1.4  5 1400  463965  246
+  ... Passed --   1.5  5 1084  365479  246
 Test (2C): Figure 8 (unreliable) ...
-  ... Passed --  28.1  5 25588 36634913   88
+  ... Passed --  32.8  5 13354 25032486   61
 Test (2C): churn ...
-  ... Passed --  19.0  5 13428 19540624 1391
+  ... Passed --  16.5  5 16236 53451674 3736
 Test (2C): unreliable churn ...
-  ... Passed --  22.7  5 11808 14376116  957
+  ... Passed --  16.1  5 3464 2456591  476
 PASS
-ok  	github.com/alioth4j/6.824/src/raft	119.893s
+ok  	github.com/alioth4j/6.824/src/raft	111.354s
 ```
 
 ## Lab3 KVRaft

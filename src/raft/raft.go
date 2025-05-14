@@ -213,8 +213,8 @@ type AppendEntriesReply struct {
 	Term    int
 	Success bool
 
-	// 2C page 7-8 gray line optimization
-	FirstIndexOfConflictingTerm int
+	ConflictTerm int
+	ConflictIndex int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -224,7 +224,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm && rf.state == LEADER) {
 		reply.Term = rf.currentTerm
 		reply.Success = false
-		reply.FirstIndexOfConflictingTerm = -1
 		return
 	}
 
@@ -242,25 +241,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Term = rf.currentTerm
-	reply.FirstIndexOfConflictingTerm = -1
 
 	// log consistency check, check the last index and term.
 	if args.PrevLogIndex > 0 {
-		if len(rf.log) < args.PrevLogIndex {
+		if args.PrevLogIndex > len(rf.log) {
 			reply.Success = false
+			reply.ConflictTerm = -1
+			reply.ConflictIndex = len(rf.log) + 1
 			return
 		}
+
 		if rf.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
 			reply.Success = false
-			rf.log = rf.log[:args.PrevLogIndex]
-			for i := args.PrevLogIndex; i > 0; i-- {
-				if rf.log[i-1].Term != args.PrevLogTerm {
-					reply.FirstIndexOfConflictingTerm = i
-				} else {
+			reply.ConflictTerm = rf.log[args.PrevLogIndex - 1].Term
+			reply.ConflictIndex = args.PrevLogIndex
+			for i := args.PrevLogIndex - 1; i >= 1; i-- {
+				if rf.log[i - 1].Term != reply.ConflictTerm {
+					reply.ConflictIndex = i + 1
 					break
 				}
 			}
-			rf.persist()
 			return
 		}
 	}
@@ -415,11 +415,20 @@ func (rf *Raft) broadcastAppendEntries() {
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 				rf.updateCommitIndex()
 			} else {
-				if reply.FirstIndexOfConflictingTerm != -1 {
-					rf.nextIndex[server] = reply.FirstIndexOfConflictingTerm
+				if reply.ConflictTerm == -1 {
+					rf.nextIndex[server] = reply.ConflictIndex
 				} else {
-					if rf.nextIndex[server] > 1 {
-						rf.nextIndex[server]--
+					lastTermIndex := -1
+					for i := len(rf.log); i >= 1; i-- {
+						if rf.log[i - 1].Term == reply.ConflictTerm {
+							lastTermIndex = i
+							break
+						}
+					} 
+					if lastTermIndex == -1 {
+						rf.nextIndex[server] = reply.ConflictIndex
+					} else {
+						rf.nextIndex[server] = lastTermIndex
 					}
 				}
 			}

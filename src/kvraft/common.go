@@ -11,6 +11,7 @@ type Err string
 type GetArgs struct {
 	Key      string
 	ClientId int64
+	Seq int
 }
 
 type GetReply struct {
@@ -24,15 +25,9 @@ type PutAppendArgs struct {
 	Value     string
 	Op        string // "Put" or "Append"
 	ClientId  int64
-	RequestId int64
+	Seq int
 }
 
 type PutAppendReply struct {
 	Err Err
-}
-
-type IsLeaderArgs struct{}
-
-type IsLeaderReply struct {
-	Leader bool
 }

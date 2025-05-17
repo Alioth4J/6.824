@@ -2,15 +2,15 @@ package kvraft
 
 import (
 	"crypto/rand"
-	"github.com/alioth4j/6.824/src/labrpc"
 	"math/big"
-	"sync/atomic"
+	"github.com/alioth4j/6.824/src/labrpc"
 )
 
 type Clerk struct {
 	servers  []*labrpc.ClientEnd
-	leader   int32
+	leader   int
 	clientId int64
+	seq int
 }
 
 func nrand() int64 {
@@ -25,28 +25,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	ck.leader = 0
 	ck.clientId = nrand()
-	//ck.updateLeader()
+	ck.seq = 0
 	return ck
 }
-
-//func (ck *Clerk) updateLeader() {
-//	args := &IsLeaderArgs{}
-//	reply := &IsLeaderReply{}
-//
-//	if ok := ck.servers[ck.leader].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
-//		return
-//	}
-//
-//	for i := 0; i < len(ck.servers); i++ {
-//		if i == ck.leader {
-//			continue
-//		}
-//		if ok := ck.servers[i].Call("KVServer.IsLeader", args, reply); ok && reply.Leader {
-//			ck.leader = i
-//			return
-//		}
-//	}
-//}
 
 // fetch the current value for a key.
 // returns "" if the key does not exist.
@@ -59,26 +40,25 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-	// serial, no need to use lock
 	args := &GetArgs{
 		Key:      key,
 		ClientId: ck.clientId,
+		Seq: ck.seq,
 	}
-	leader := atomic.LoadInt32(&ck.leader)
+	ck.seq++
 	for {
 		reply := &GetReply{}
-		ok := ck.servers[leader].Call("KVServer.Get", args, reply)
-		if ok {
-			if reply.Err == OK {
-				return reply.Value
-			} else if reply.Err == ErrWrongLeader {
-				ck.leader = ck.nextLeader(leader)
-				continue
-			} else if reply.Err == ErrTimeout {
-				continue
-			}
-		} else {
-			ck.leader = ck.nextLeader(leader)
+		ok := ck.servers[ck.leader].Call("KVServer.Get", args, reply)
+		if !ok {
+			ck.leader = (ck.leader + 1) % len(ck.servers)
+			continue
+		}
+		if reply.Err == OK {
+			return reply.Value
+		} else if reply.Err == ErrWrongLeader {
+			ck.leader = (ck.leader + 1) % len(ck.servers)
+			continue
+		} else if reply.Err == ErrTimeout {
 			continue
 		}
 	}
@@ -93,39 +73,30 @@ func (ck *Clerk) Get(key string) string {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// serial, no need to use lock
 	args := &PutAppendArgs{
 		Key:       key,
 		Value:     value,
 		Op:        op,
 		ClientId:  ck.clientId,
-		RequestId: nrand(),
+		Seq: ck.seq,
 	}
-	leader := atomic.LoadInt32(&ck.leader)
+	ck.seq++
 	for {
 		reply := &PutAppendReply{}
-		ok := ck.servers[leader].Call("KVServer.PutAppend", args, reply)
-		if ok {
-			if reply.Err == OK {
-				return
-			} else if reply.Err == ErrWrongLeader {
-				leader = ck.nextLeader(leader)
-				continue
-			} else if reply.Err == ErrTimeout {
-				continue
-			}
-		} else {
-			ck.leader = ck.nextLeader(leader)
+		ok := ck.servers[ck.leader].Call("KVServer.PutAppend", args, reply)
+		if !ok {
+			ck.leader = (ck.leader + 1) % len(ck.servers)
+			continue
+		}
+		if reply.Err == OK {
+			return
+		} else if reply.Err == ErrWrongLeader {
+			ck.leader = (ck.leader + 1) % len(ck.servers)
+			continue
+		} else if reply.Err == ErrTimeout {
 			continue
 		}
 	}
-}
-
-func (ck *Clerk) nextLeader(current int32) int32 {
-	next := (current + 1) % int32(len(ck.servers))
-	atomic.StoreInt32(&ck.leader, next)
-	return next
-
 }
 
 func (ck *Clerk) Put(key string, value string) {

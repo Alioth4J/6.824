@@ -125,12 +125,3 @@ ok  	github.com/alioth4j/6.824/src/raft	111.354s
 
 ## Lab3 KVRaft
 ### 3A
-Partial passed.  
-```bash
-$ go test -run 3A
-Test: one client (3A) ...
-  ... Passed --  15.2  5  7531 1379
-Test: many clients (3A) ...
-^Csignal: interrupt
-FAIL	github.com/alioth4j/6.824/src/kvraft	121.323s
-```

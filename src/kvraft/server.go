@@ -1,13 +1,14 @@
 package kvraft
 
 import (
-	"github.com/alioth4j/6.824/src/labgob"
-	"github.com/alioth4j/6.824/src/labrpc"
-	"github.com/alioth4j/6.824/src/raft"
 	//"log"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+	"github.com/alioth4j/6.824/src/labgob"
+	"github.com/alioth4j/6.824/src/labrpc"
+	"github.com/alioth4j/6.824/src/raft"
 )
 
 //const Debug = 0
@@ -26,7 +27,7 @@ type Op struct {
 	Value     string // only used in PutAppend
 	Type      string // "Get", "Put", "Append"
 	ClientId  int64
-	RequestId int64
+	Seq int
 }
 
 type KVServer struct {
@@ -35,15 +36,18 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	rf      *raft.Raft
 
-	kv               map[string]string
-	getResults       map[int]chan string   // key: index; value: value
-	putAppendResults map[int]chan struct{} // key: index; value: struct{}{}
-	lastApplied      int
-	duplicateMap     map[int64]int64 // key: clientId; value: RequestId
+	kv map[string]string
+	pendingCh map[string]*NotifyCh
+	lastApplied map[int64]int // key: clientId, value: seq
 
 	maxraftstate int // snapshot if log grows this big
 
 	dead int32 // set by Kill()
+}
+
+type NotifyCh struct {
+	getCh chan string
+	putAppendCh chan struct{}
 }
 
 // servers[] contains the ports of the set of
@@ -63,17 +67,16 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
-	// new and set
-	kv := new(KVServer)
-	kv.me = me
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv := &KVServer {
+		me: me,
+		applyCh: make(chan raft.ApplyMsg),
+		kv: make(map[string]string),
+		pendingCh: make(map[string]*NotifyCh),
+		lastApplied: make(map[int64]int),
+		maxraftstate: maxraftstate,
+		dead: 0,
+	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.kv = make(map[string]string)
-	kv.getResults = make(map[int]chan string)
-	kv.putAppendResults = make(map[int]chan struct{})
-	kv.lastApplied = 0
-	kv.duplicateMap = make(map[int64]int64)
-	kv.maxraftstate = maxraftstate
 
 	// apply with goroutine
 	go kv.apply()
@@ -90,188 +93,127 @@ func (kv *KVServer) apply() {
 
 		commandValid := applyMsg.CommandValid
 		command := applyMsg.Command
-		commandIndex := applyMsg.CommandIndex
+		// commandIndex := applyMsg.CommandIndex
+
+		kv.mu.Lock()
 		if commandValid {
-			kv.mu.Lock()
-
-			if commandIndex <= kv.lastApplied {
-				kv.mu.Unlock()
-				continue
-			}
-
-			notifyGet := make(chan string, 1)
-			notifyPutAppend := make(chan struct{}, 1)
-
-			var value string
-
-			// commit to kv.kv
 			op := command.(Op)
-			switch op.Type {
-			case "Get":
-				notifyGet = kv.getResults[commandIndex]
-				if v, ok := kv.kv[op.Key]; ok {
-					value = v
-				} else {
-					value = ""
-				}
-				break
-			case "Put", "Append":
-				if lastRequestId, ok := kv.duplicateMap[op.ClientId]; ok {
-					if op.RequestId == lastRequestId {
-						if resultChan, ok := kv.putAppendResults[commandIndex]; ok {
-							go func() {
-								resultChan <- struct{}{}
-							}()
-						}
-						kv.lastApplied = commandIndex
-						kv.mu.Unlock()
-						continue
+			pendingKey := fmt.Sprintf("%d-%d", op.ClientId, op.Seq)
+
+		    if op.Seq <= kv.lastApplied[op.ClientId] {
+				if ch, ok := kv.pendingCh[pendingKey]; ok {
+					switch op.Type {
+					case "Get":
+			            // TODO former Get trx may see the results
+						// of latter trxs
+						ch.getCh <- kv.kv[op.Key]
+						break
+					case "Put", "Append":
+						ch.putAppendCh <- struct{}{}
 					}
 				}
-				kv.duplicateMap[op.ClientId] = op.RequestId
-				if op.Type == "Put" {
-					kv.kv[op.Key] = op.Value
-				} else if op.Type == "Append" {
-					kv.kv[op.Key] += op.Value
+				kv.mu.Unlock()
+				continue
+		    }
+
+			switch op.Type {
+			case "Get":
+				value := kv.kv[op.Key]
+				if ch, ok := kv.pendingCh[pendingKey]; ok {
+					ch.getCh <- value
 				}
-				notifyPutAppend = kv.putAppendResults[commandIndex]
+				break
+			case "Put":
+				kv.kv[op.Key] = op.Value
+				if ch, ok := kv.pendingCh[pendingKey]; ok {
+					ch.putAppendCh <- struct{}{}
+				}
+				break
+			case "Append":
+				kv.kv[op.Key] += op.Value
+				if ch, ok := kv.pendingCh[pendingKey]; ok {
+					ch.putAppendCh <- struct{}{}
+				}
 				break
 			}
-
-			kv.lastApplied = commandIndex
-
-			kv.mu.Unlock()
-
-			if _, isLeader := kv.rf.GetState(); !isLeader {
-				// let the Clerk timeout and resend a request
-				//kv.mu.Unlock()
-				continue
-			}
-
-			if notifyGet != nil {
-				select {
-				case notifyGet <- value:
-				default:
-				}
-			}
-			if notifyPutAppend != nil {
-				select {
-				case notifyPutAppend <- struct{}{}:
-				default:
-				}
-			}
+			kv.lastApplied[op.ClientId] = op.Seq
 		} else {
 			// ignore
 		}
+		kv.mu.Unlock()
 	}
 }
 
-//func (kv *KVServer) IsLeader(args *IsLeaderArgs, reply *IsLeaderReply) {
-//	kv.mu.Lock()
-//	defer kv.mu.Unlock()
-//	_, isLeader := kv.rf.GetState()
-//	reply.Leader = isLeader
-//}
-
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// leader check
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
+	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
-		//kv.mu.Unlock()
 		return
 	}
 
-	// send request to raft
 	op := Op{
 		Key:      args.Key,
 		Type:     "Get",
 		ClientId: args.ClientId,
+		Seq: args.Seq,
 	}
-	index, _, isLeader := kv.rf.Start(op)
+	// TODO term
+	_, _, isLeader := kv.rf.Start(op)
 
-	// leader check
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		//kv.mu.Unlock()
 		return
 	}
 
-	// lock
+	pendingKey := fmt.Sprintf("%d-%d", args.ClientId, args.Seq)
+	ch := &NotifyCh{getCh: make(chan string, 1)}
 	kv.mu.Lock()
-
-	// make the result channel
-	resultChan := make(chan string, 1)
-	kv.getResults[index] = resultChan
-
-	// unlock and wait for the reply
+	kv.pendingCh[pendingKey] = ch
 	kv.mu.Unlock()
 	select {
-	case value := <-resultChan:
+	case value := <-ch.getCh:
 		reply.Err = OK
 		reply.Value = value
 	case <-time.After(timeout):
 		reply.Err = ErrTimeout
 	}
-
-	// cleanup
 	kv.mu.Lock()
-	delete(kv.getResults, index)
+	delete(kv.pendingCh, pendingKey)
 	kv.mu.Unlock()
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// leader check
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
+	if _, isLeader := kv.rf.GetState(); !isLeader {
 		reply.Err = ErrWrongLeader
-		//kv.mu.Unlock()
 		return
 	}
 
-	// pre-deduplicate
-	if lastRequestId, ok := kv.duplicateMap[args.ClientId]; ok && args.RequestId == lastRequestId {
-		reply.Err = OK
-		//kv.mu.Unlock()
-		return
-	}
-
-	// send request to raft
 	op := Op{
 		Key:       args.Key,
 		Value:     args.Value,
 		Type:      args.Op,
 		ClientId:  args.ClientId,
-		RequestId: args.RequestId,
+		Seq: args.Seq,
 	}
-	index, _, isLeader := kv.rf.Start(op)
+	_, _, isLeader := kv.rf.Start(op)
 
-	// leader check
 	if !isLeader {
 		reply.Err = ErrWrongLeader
-		//kv.mu.Unlock()
 		return
 	}
 
-	// lock
+	pendingKey := fmt.Sprintf("%d-%d", args.ClientId, args.Seq)
+	ch := &NotifyCh{putAppendCh: make(chan struct{}, 1)}
 	kv.mu.Lock()
-
-	// make the result channel
-	resultChan := make(chan struct{}, 1)
-	kv.putAppendResults[index] = resultChan
-
-	// wait for the reply
+	kv.pendingCh[pendingKey] = ch
 	kv.mu.Unlock()
 	select {
-	case <-resultChan:
+	case <-ch.putAppendCh:
 		reply.Err = OK
 	case <-time.After(timeout):
 		reply.Err = ErrTimeout
 	}
-
-	// cleanup
 	kv.mu.Lock()
-	delete(kv.putAppendResults, index)
+	delete(kv.pendingCh, pendingKey)
 	kv.mu.Unlock()
 }
 

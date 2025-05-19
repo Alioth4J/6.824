@@ -100,12 +100,15 @@ func (kv *KVServer) apply() {
 			op := command.(Op)
 			pendingKey := fmt.Sprintf("%d-%d", op.ClientId, op.Seq)
 
+			_, exists := kv.lastApplied[op.ClientId]
+			if !exists {
+				kv.lastApplied[op.ClientId] = -1
+			}
+
 		    if op.Seq <= kv.lastApplied[op.ClientId] {
 				if ch, ok := kv.pendingCh[pendingKey]; ok {
 					switch op.Type {
 					case "Get":
-			            // TODO former Get trx may see the results
-						// of latter trxs
 						ch.getCh <- kv.kv[op.Key]
 						break
 					case "Put", "Append":
@@ -116,6 +119,12 @@ func (kv *KVServer) apply() {
 				continue
 		    }
 
+			if op.Seq > kv.lastApplied[op.ClientId] + 1 {
+				kv.mu.Unlock()
+				continue
+			}
+
+			// Exactly: op.Seq == kv.lastApplied[op.ClientId] + 1
 			switch op.Type {
 			case "Get":
 				value := kv.kv[op.Key]

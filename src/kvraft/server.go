@@ -1,14 +1,15 @@
 package kvraft
 
 import (
+	"bytes"
 	//"log"
 	"fmt"
-	"sync"
-	"sync/atomic"
-	"time"
 	"github.com/alioth4j/6.824/src/labgob"
 	"github.com/alioth4j/6.824/src/labrpc"
 	"github.com/alioth4j/6.824/src/raft"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 //const Debug = 0
@@ -23,11 +24,11 @@ import (
 const timeout = 500 * time.Millisecond
 
 type Op struct {
-	Key       string
-	Value     string // only used in PutAppend
-	Type      string // "Get", "Put", "Append"
-	ClientId  int64
-	Seq int
+	Key      string
+	Value    string // only used in PutAppend
+	Type     string // "Get", "Put", "Append"
+	ClientId int64
+	Seq      int
 }
 
 type KVServer struct {
@@ -36,8 +37,8 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	rf      *raft.Raft
 
-	kv map[string]string
-	pendingCh map[string]*NotifyCh
+	kv          map[string]string
+	pendingCh   map[string]*NotifyCh
 	lastApplied map[int64]int // key: clientId, value: seq
 
 	maxraftstate int // snapshot if log grows this big
@@ -46,7 +47,7 @@ type KVServer struct {
 }
 
 type NotifyCh struct {
-	getCh chan string
+	getCh       chan string
 	putAppendCh chan struct{}
 }
 
@@ -67,16 +68,29 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
 
-	kv := &KVServer {
-		me: me,
-		applyCh: make(chan raft.ApplyMsg),
-		kv: make(map[string]string),
-		pendingCh: make(map[string]*NotifyCh),
-		lastApplied: make(map[int64]int),
+	kv := &KVServer{
+		me:           me,
+		applyCh:      make(chan raft.ApplyMsg),
+		kv:           make(map[string]string),
+		pendingCh:    make(map[string]*NotifyCh),
+		lastApplied:  make(map[int64]int),
 		maxraftstate: maxraftstate,
-		dead: 0,
+		dead:         0,
 	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+
+	// TODO this is start, not restart.
+	// TODO how does a kvserver restart?
+	// restore from snapshot
+	data := kv.rf.GetSnapshot()
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var kvInSnapshot map[string]string
+	if d.Decode(&kvInSnapshot) != nil {
+		// ignore error
+	} else {
+		kv.kv = kvInSnapshot
+	}
 
 	// apply with goroutine
 	go kv.apply()
@@ -93,7 +107,21 @@ func (kv *KVServer) apply() {
 
 		commandValid := applyMsg.CommandValid
 		command := applyMsg.Command
-		// commandIndex := applyMsg.CommandIndex
+		commandIndex := applyMsg.CommandIndex
+
+		if applyMsg.IsSnapshot {
+			data := applyMsg.Snapshot
+			r := bytes.NewBuffer(data)
+			d := labgob.NewDecoder(r)
+			var kvFromSnapshot map[string]string
+			if d.Decode(&kvFromSnapshot) != nil {
+				// ignore error
+				return
+			} else {
+				kv.kv = kvFromSnapshot
+			}
+			continue
+		}
 
 		kv.mu.Lock()
 		if commandValid {
@@ -105,7 +133,7 @@ func (kv *KVServer) apply() {
 				kv.lastApplied[op.ClientId] = -1
 			}
 
-		    if op.Seq <= kv.lastApplied[op.ClientId] {
+			if op.Seq <= kv.lastApplied[op.ClientId] {
 				if ch, ok := kv.pendingCh[pendingKey]; ok {
 					switch op.Type {
 					case "Get":
@@ -117,9 +145,9 @@ func (kv *KVServer) apply() {
 				}
 				kv.mu.Unlock()
 				continue
-		    }
+			}
 
-			if op.Seq > kv.lastApplied[op.ClientId] + 1 {
+			if op.Seq > kv.lastApplied[op.ClientId]+1 {
 				kv.mu.Unlock()
 				continue
 			}
@@ -146,6 +174,15 @@ func (kv *KVServer) apply() {
 				break
 			}
 			kv.lastApplied[op.ClientId] = op.Seq
+
+			// snapshot
+			if kv.rf.GetSnapshotSize() >= kv.maxraftstate {
+				w := new(bytes.Buffer)
+				e := labgob.NewEncoder(w)
+				e.Encode(kv.kv)
+				data := w.Bytes()
+				kv.rf.Snapshot(commandIndex, data)
+			}
 		} else {
 			// ignore
 		}
@@ -163,7 +200,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		Key:      args.Key,
 		Type:     "Get",
 		ClientId: args.ClientId,
-		Seq: args.Seq,
+		Seq:      args.Seq,
 	}
 	// TODO term
 	_, _, isLeader := kv.rf.Start(op)
@@ -197,11 +234,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	op := Op{
-		Key:       args.Key,
-		Value:     args.Value,
-		Type:      args.Op,
-		ClientId:  args.ClientId,
-		Seq: args.Seq,
+		Key:      args.Key,
+		Value:    args.Value,
+		Type:     args.Op,
+		ClientId: args.ClientId,
+		Seq:      args.Seq,
 	}
 	_, _, isLeader := kv.rf.Start(op)
 

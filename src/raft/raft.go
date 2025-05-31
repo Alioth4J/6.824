@@ -155,9 +155,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// the voter denies its vote if its own log is more up-to-date than that of the candidate.
 	lastLogIndex := 0
 	lastLogTerm := 0
-	if len(rf.log) > 0 {
-		lastLogIndex = len(rf.log)
-		lastLogTerm = rf.log[lastLogIndex-1].Term
+	if rf.lastIncludedIndex + len(rf.log) > 0 {
+		lastLogIndex = rf.lastIncludedIndex + len(rf.log)
+		lastLogTerm = rf.log[len(rf.log)-1].Term
 	}
 	logUpToDate := args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)
 
@@ -252,20 +252,33 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Term = rf.currentTerm
 
-	// log consistency check, check the last index and term.
-	if args.PrevLogIndex > 0 {
-		if args.PrevLogIndex > len(rf.log) {
+	if args.PrevLogIndex < rf.lastIncludedIndex {
+		reply.Success = false
+		reply.ConflictTerm = -1
+		reply.ConflictIndex = rf.lastIncludedIndex + 1
+		return
+	} else if args.PrevLogIndex == rf.lastIncludedIndex {
+		if args.PrevLogIndex != rf.lastIncludedTerm {
+			reply.Success = false
+			reply.ConflictTerm = rf.lastIncludedTerm
+			reply.ConflictIndex = rf.lastIncludedIndex
+			return
+		}
+	} else {
+		if args.PrevLogIndex > rf.lastIncludedIndex + len(rf.log) {
 			reply.Success = false
 			reply.ConflictTerm = -1
-			reply.ConflictIndex = len(rf.log) + 1
+			reply.ConflictIndex = rf.lastIncludedIndex + 1
 			return
 		}
 
-		if rf.log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+		logIndex := args.PrevLogIndex - rf.lastIncludedIndex
+		if rf.log[logIndex-1].Term != args.PrevLogTerm {
 			reply.Success = false
-			reply.ConflictTerm = rf.log[args.PrevLogIndex-1].Term
-			reply.ConflictIndex = args.PrevLogIndex
-			for i := args.PrevLogIndex - 1; i >= 1; i-- {
+			reply.ConflictTerm = rf.log[logIndex - 1].Term
+			reply.ConflictIndex = logIndex
+			// find the first index of this conflicting term
+			for i := logIndex; i >= 1; i-- {
 				if rf.log[i-1].Term != reply.ConflictTerm {
 					reply.ConflictIndex = i + 1
 					break
@@ -278,14 +291,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// handle conflicts and append new log entries
 	if len(args.Entries) > 0 {
 		appendIndex := args.PrevLogIndex + 1
-		if appendIndex <= len(rf.log) {
+		if appendIndex <= rf.lastIncludedIndex + len(rf.log) {
 			for i, entry := range args.Entries {
 				logIndex := appendIndex + i
-				if logIndex > len(rf.log) {
+				if logIndex > rf.lastIncludedIndex + len(rf.log) {
 					rf.log = append(rf.log, args.Entries[i:]...)
 					break
-				} else if rf.log[logIndex-1].Term != entry.Term {
-					rf.log = rf.log[:logIndex-1]
+				} else if rf.log[logIndex-rf.lastIncludedIndex - 1].Term != entry.Term {
+					rf.log = rf.log[:logIndex-rf.lastIncludedIndex - 1]
 					rf.log = append(rf.log, args.Entries[i:]...)
 					break
 				}
@@ -297,7 +310,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.persist()
 
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, len(rf.log))
+		rf.commitIndex = min(args.LeaderCommit, rf.lastIncludedIndex + len(rf.log))
 		rf.persist()
 	}
 
@@ -340,22 +353,36 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.mu.Unlock()
 		return
 	}
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.state = FOLLOWER
+		rf.votedFor = -1
+		// as a follower, it still can install snapshot
+	}
+
+	// update snapshot metadata
+	oldLastIncludedIndex := rf.lastIncludedIndex
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.lastIncludedTerm = args.LastIncludedTerm
+
+	offset := args.LastIncludedIndex - oldLastIncludedIndex
+	if offset > 0 && offset <= len(rf.log) {
+		rf.log = rf.log[offset:]
+	} else {
+		rf.log = []LogEntry{}
+	}
 
 	rf.persister.SaveStateAndSnapshot(rf.persist(), args.Data)
 
-	// if rf.getLastLogIndex() >= args.LastIncludedIndex && rf.getLastLogTerm() >= args.LastIncludedTerm {
-	// 	rf.log = rf.log[(len(rf.log) - (rf.getLastLogIndex() - args.LastIncludedIndex)):]
-	// } else {
-	// 	rf.log = rf.log[:0]
-	// }
-
-	offset := args.LastIncludedIndex - rf.lastIncludedIndex
-	if offset > 0 && offset < len(rf.log) {
-		rf.log = rf.log[offset:]
-	} else {
-		rf.log = make([]LogEntry, 0)
+	// update commitIndex and lastApplied
+	if rf.commitIndex < rf.lastIncludedIndex {
+		rf.commitIndex = rf.lastIncludedIndex
+	}
+	if rf.lastApplied < rf.lastIncludedIndex {
+		rf.lastApplied = rf.lastIncludedIndex
 	}
 
+	// let the user know
 	applyMsg := ApplyMsg{
 		IsSnapshot: true,
 		Snapshot:   args.Data,
@@ -390,7 +417,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// --- start the agreement ---
 	// construct LogEntry
 	entry := LogEntry{
-
 		Term:    rf.currentTerm,
 		Command: command,
 	}
@@ -399,7 +425,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.log = append(rf.log, entry)
 	rf.persist()
 
-	index := len(rf.log)
+	index := rf.lastIncludedIndex + len(rf.log) + 1
 	term := rf.currentTerm
 
 	// use goroutine to sync to others, as this method should return immediately
@@ -439,12 +465,12 @@ func (rf *Raft) broadcastAppendEntries() {
 			prevLogIndex := nextIndex - 1
 			prevLogTerm := 0
 			if prevLogIndex > 0 {
-				prevLogTerm = rf.log[prevLogIndex-1].Term
+				prevLogTerm = rf.log[prevLogIndex-rf.lastIncludedIndex-1].Term
 			}
 			// sync entries
 			var entries []LogEntry
 			if nextIndex <= len(rf.log) {
-				entries = rf.log[nextIndex-1:]
+				entries = rf.log[nextIndex-rf.lastIncludedIndex - 1:]
 			} else {
 				entries = nil
 			}
@@ -487,7 +513,7 @@ func (rf *Raft) broadcastAppendEntries() {
 					lastTermIndex := -1
 					for i := len(rf.log); i >= 1; i-- {
 						if rf.log[i-1].Term == reply.ConflictTerm {
-							lastTermIndex = i
+							lastTermIndex = rf.lastIncludedIndex + i
 							break
 						}
 					}
@@ -503,12 +529,15 @@ func (rf *Raft) broadcastAppendEntries() {
 }
 
 func (rf *Raft) updateCommitIndex() {
-	for N := len(rf.log); N > rf.commitIndex; N-- {
-		// the leader can only commit entries in self's term
-		if rf.log[N-1].Term != rf.currentTerm {
+	rf.commitIndex = max(rf.commitIndex, rf.lastIncludedIndex)
+	for N := rf.lastIncludedIndex + len(rf.log); N > rf.commitIndex; N-- {
+        logIndex := N - rf.lastIncludedIndex - 1
+		if logIndex < 0 || logIndex >= len(rf.log) {
 			continue
 		}
-
+		if rf.log[logIndex].Term != rf.currentTerm {
+			continue
+		}
 		count := 1
 		for i := range rf.peers {
 			if i != rf.me && rf.matchIndex[i] >= N {
@@ -635,8 +664,8 @@ func (rf *Raft) startElection() {
 	lastLogIndex := 0
 	lastLogTerm := 0
 	if len(rf.log) > 0 {
-		lastLogIndex = len(rf.log)
-		lastLogTerm = rf.log[lastLogIndex-1].Term
+		lastLogIndex = rf.lastIncludedIndex + len(rf.log)
+		lastLogTerm = rf.log[lastLogIndex-rf.lastIncludedIndex-1].Term
 	}
 	args := &RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -670,7 +699,7 @@ func (rf *Raft) startElection() {
 						rf.state = LEADER
 						// align the others with me
 						for j := range rf.peers {
-							rf.nextIndex[j] = len(rf.log) + 1
+							rf.nextIndex[j] = rf.lastIncludedIndex + len(rf.log)
 							rf.matchIndex[j] = 0
 						}
 						// initial heartbeats

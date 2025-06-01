@@ -116,7 +116,7 @@ func (kv *KVServer) apply() {
 			var kvFromSnapshot map[string]string
 			if d.Decode(&kvFromSnapshot) != nil {
 				// ignore error
-				return
+				continue
 			} else {
 				kv.kv = kvFromSnapshot
 			}

@@ -79,24 +79,35 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-	// TODO this is start, not restart.
-	// TODO how does a kvserver restart?
-	// restore from snapshot
-	data := kv.rf.GetSnapshot()
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
-	var kvInSnapshot map[string]string
-	if d.Decode(&kvInSnapshot) != nil {
-		// ignore error
-	} else {
-		kv.kv = kvInSnapshot
-	}
-
 	// apply with goroutine
 	go kv.apply()
 
 	// return
 	return kv
+}
+
+func (kv *KVServer) encodeSnapshot() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.kv)
+	e.Encode(kv.lastApplied)
+	return w.Bytes()
+}
+
+func (kv *KVServer) decodeSnapshot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var kvInSnapshot map[string]string
+	var clientSeqs map[int64]int
+	if d.Decode(&kvInSnapshot) != nil || d.Decode(&clientSeqs) != nil {
+		// ignore error
+	} else {
+		kv.kv = kvInSnapshot
+		kv.lastApplied = clientSeqs
+	}
 }
 
 func (kv *KVServer) apply() {
@@ -105,27 +116,9 @@ func (kv *KVServer) apply() {
 			return
 		}
 
-		commandValid := applyMsg.CommandValid
-		command := applyMsg.Command
-		commandIndex := applyMsg.CommandIndex
-
-		if applyMsg.IsSnapshot {
-			data := applyMsg.Snapshot
-			r := bytes.NewBuffer(data)
-			d := labgob.NewDecoder(r)
-			var kvFromSnapshot map[string]string
-			if d.Decode(&kvFromSnapshot) != nil {
-				// ignore error
-				continue
-			} else {
-				kv.kv = kvFromSnapshot
-			}
-			continue
-		}
-
 		kv.mu.Lock()
-		if commandValid {
-			op := command.(Op)
+		if applyMsg.CommandValid {
+			op := applyMsg.Command.(Op)
 			pendingKey := fmt.Sprintf("%d-%d", op.ClientId, op.Seq)
 
 			_, exists := kv.lastApplied[op.ClientId]
@@ -176,13 +169,12 @@ func (kv *KVServer) apply() {
 			kv.lastApplied[op.ClientId] = op.Seq
 
 			// snapshot
-			if kv.rf.GetSnapshotSize() >= kv.maxraftstate {
-				w := new(bytes.Buffer)
-				e := labgob.NewEncoder(w)
-				e.Encode(kv.kv)
-				data := w.Bytes()
-				kv.rf.Snapshot(commandIndex, data)
+			if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() >= kv.maxraftstate {
+				snapshot := kv.encodeSnapshot()
+				kv.rf.Snapshot(applyMsg.CommandIndex, snapshot)
 			}
+		} else if applyMsg.IsSnapshot {
+			kv.decodeSnapshot(applyMsg.Snapshot)
 		} else {
 			// ignore
 		}
@@ -202,9 +194,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		ClientId: args.ClientId,
 		Seq:      args.Seq,
 	}
-	// TODO term
-	_, _, isLeader := kv.rf.Start(op)
 
+	_, _, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return

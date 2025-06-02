@@ -158,7 +158,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	lastLogTerm := 0
 	if rf.lastIncludedIndex+len(rf.log) > 0 {
 		lastLogIndex = rf.lastIncludedIndex + len(rf.log)
-		lastLogTerm = rf.log[len(rf.log)-1].Term
+		if len(rf.log) == 0 {
+			lastLogTerm = rf.lastIncludedTerm
+		} else {
+		    lastLogTerm = rf.log[len(rf.log)-1].Term
+		}
 	}
 	logUpToDate := args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)
 
@@ -275,7 +279,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		if rf.log[logIndex].Term != args.PrevLogTerm {
 			reply.Success = false
-			reply.ConflictTerm = rf.log[logIndex-1].Term
+			reply.ConflictTerm = rf.log[logIndex].Term
 			reply.ConflictIndex = logIndex
 			// find the first index of this conflicting term
 			for i := logIndex; i >= 1; i-- {
@@ -345,6 +349,12 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.mu.Unlock()
 		return
 	}
+	
+    select {
+	case rf.resetElectionTimerChan <- struct{}{}:
+	default:
+	}
+
 	if args.LastIncludedIndex <= rf.lastIncludedIndex {
 		rf.mu.Unlock()
 		return
@@ -450,6 +460,25 @@ func (rf *Raft) broadcastAppendEntries() {
 		if i == rf.me {
 			continue
 		}
+
+		rf.mu.Lock()
+		nextIndex := rf.nextIndex[i]
+		if nextIndex <= rf.lastIncludedIndex {
+			snapshot := rf.persister.ReadSnapshot()
+			if len(snapshot) > 0 {
+				go rf.sendInstallSnapshot(i, &InstallSnapshotArgs {
+					Term: term,
+					LeaderId: rf.me,
+					LastIncludedIndex: rf.lastIncludedIndex,
+					LastIncludedTerm: rf.lastIncludedTerm,
+					Data: snapshot,
+				}, &InstallSnapshotReply{})
+			}
+			rf.mu.Unlock()
+			continue
+		}
+		rf.mu.Unlock()
+
 		go func(server int) {
 			rf.mu.Lock()
 			if rf.state != LEADER {
@@ -656,20 +685,18 @@ func (rf *Raft) electionTimerGoroutine() {
 	for !rf.killed() {
 		electionTimeout := time.Duration(300+rand.Intn(300)) * time.Millisecond
 		time.Sleep(electionTimeout)
+		rf.mu.Lock()
 		if rf.state != LEADER {
-			rf.mu.Lock()
-			if rf.state != LEADER {
-				select {
-				case <-rf.resetElectionTimerChan:
-				default:
-					rf.state = CANDIDATE
-					rf.mu.Unlock()
-					rf.startElection()
-					continue
-				}
+			select {
+			case <-rf.resetElectionTimerChan:
+			default:
+				rf.state = CANDIDATE
+				rf.mu.Unlock()
+				rf.startElection()
+				continue
 			}
-			rf.mu.Unlock()
 		}
+		rf.mu.Unlock()
 	}
 }
 
@@ -851,7 +878,7 @@ func (rf *Raft) broadcastInstallSnapshot(index int, snapshot []byte) {
 	}
 
 	args := &InstallSnapshotArgs{
-		Term:              rf.currentTerm,
+		Term: rf.currentTerm,
 		LeaderId:          rf.me,
 		LastIncludedIndex: rf.lastIncludedIndex,
 		LastIncludedTerm:  rf.lastIncludedTerm,

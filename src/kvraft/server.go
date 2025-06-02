@@ -175,6 +175,7 @@ func (kv *KVServer) apply() {
 			}
 		} else if applyMsg.IsSnapshot {
 			kv.decodeSnapshot(applyMsg.Snapshot)
+			kv.pendingCh = make(map[string]*NotifyCh)
 		} else {
 			// ignore
 		}

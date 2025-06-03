@@ -78,6 +78,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		dead:         0,
 	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	
+	// load snapshot on start/restart
+	snapshot := kv.rf.GetSnapshot()
+	kv.decodeSnapshot(snapshot)
 
 	// apply with goroutine
 	go kv.apply()

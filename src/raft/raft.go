@@ -861,6 +861,15 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.lastIncludedIndex = index
 	rf.lastIncludedTerm = term
 
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		if rf.nextIndex[i] <= index {
+			rf.nextIndex[i] = index + 1
+		}
+	}
+
 	rf.persister.SaveStateAndSnapshot(rf.persist(), snapshot)
 
 	go rf.broadcastInstallSnapshot(index, snapshot)

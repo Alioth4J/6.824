@@ -161,7 +161,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if len(rf.log) == 0 {
 			lastLogTerm = rf.lastIncludedTerm
 		} else {
-		    lastLogTerm = rf.log[len(rf.log)-1].Term
+			lastLogTerm = rf.log[len(rf.log)-1].Term
 		}
 	}
 	logUpToDate := args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)
@@ -349,8 +349,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.mu.Unlock()
 		return
 	}
-	
-    select {
+
+	select {
 	case rf.resetElectionTimerChan <- struct{}{}:
 	default:
 	}
@@ -466,12 +466,12 @@ func (rf *Raft) broadcastAppendEntries() {
 		if nextIndex <= rf.lastIncludedIndex {
 			snapshot := rf.persister.ReadSnapshot()
 			if len(snapshot) > 0 {
-				go rf.sendInstallSnapshot(i, &InstallSnapshotArgs {
-					Term: term,
-					LeaderId: rf.me,
+				go rf.sendInstallSnapshot(i, &InstallSnapshotArgs{
+					Term:              term,
+					LeaderId:          rf.me,
 					LastIncludedIndex: rf.lastIncludedIndex,
-					LastIncludedTerm: rf.lastIncludedTerm,
-					Data: snapshot,
+					LastIncludedTerm:  rf.lastIncludedTerm,
+					Data:              snapshot,
 				}, &InstallSnapshotReply{})
 			}
 			rf.mu.Unlock()
@@ -878,7 +878,7 @@ func (rf *Raft) broadcastInstallSnapshot(index int, snapshot []byte) {
 	}
 
 	args := &InstallSnapshotArgs{
-		Term: rf.currentTerm,
+		Term:              rf.currentTerm,
 		LeaderId:          rf.me,
 		LastIncludedIndex: rf.lastIncludedIndex,
 		LastIncludedTerm:  rf.lastIncludedTerm,
@@ -897,15 +897,20 @@ func (rf *Raft) broadcastInstallSnapshot(index int, snapshot []byte) {
 				return
 			}
 			reply := &InstallSnapshotReply{}
+			rf.mu.Unlock() // must unlock before RPC
 			ok := rf.sendInstallSnapshot(i, args, reply)
 			if !ok {
-				rf.mu.Unlock()
 				return
 			}
-			if reply.Term != rf.currentTerm {
-				// TODO do something more?
-				rf.mu.Unlock()
-				return
+			rf.mu.Lock()
+			if reply.Term > rf.currentTerm {
+				rf.currentTerm = reply.Term
+				rf.state = FOLLOWER
+				rf.votedFor = -1
+				rf.persist()
+			} else if reply.Term == rf.currentTerm {
+				rf.matchIndex[server] = args.LastIncludedIndex
+				rf.nextIndex[server] = args.LastIncludedIndex + 1
 			}
 			rf.mu.Unlock()
 		}(i)

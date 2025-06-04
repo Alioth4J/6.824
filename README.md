@@ -1,4 +1,6 @@
 # MIT 6.824, Spring 2020
+The project has been halted.  
+
 ## Lab1 MapReduce
 Passed all tests.  
 ```bash
@@ -163,9 +165,4 @@ ok  	github.com/alioth4j/6.824/src/kvraft	233.596s
 ```
 
 ### 3B
-Under construction.  
-```bash
-$ go test -run 3B
-Test: InstallSnapshot RPC (3B) ...
-  ... Passed --   3.1  3  4527   63
-```
+Almost there...  

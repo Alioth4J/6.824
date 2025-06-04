@@ -263,7 +263,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.ConflictIndex = rf.lastIncludedIndex + 1
 		return
 	} else if args.PrevLogIndex == rf.lastIncludedIndex {
-		if args.PrevLogIndex != rf.lastIncludedTerm {
+		if args.PrevLogTerm != rf.lastIncludedTerm {
 			reply.Success = false
 			reply.ConflictTerm = rf.lastIncludedTerm
 			reply.ConflictIndex = rf.lastIncludedIndex
